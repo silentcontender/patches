@@ -1,0 +1,117 @@
+diff --git a/src/fly.c b/src/fly.c
+index 12dd084..ff75b4b 100644
+--- a/src/fly.c
++++ b/src/fly.c
+@@ -39,6 +39,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/stat.h>
++#include <sys/sendfile.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+ #include <waitress.h>
+@@ -1698,5 +1699,49 @@ end:
+ 	return exit_status;
+ }
+ 
++int BarFlyMove(const char* tmp_file_path, const char* file_path,
++		BarSettings_t const* settings)
++{
++	int status;
++	int exit_status = 0;
++	int ifp, ofp;
++	struct stat st;
++	off_t offset = 0;
++
++	status = rename(tmp_file_path, file_path);
++	if (status == 0) {
++		goto end;
++	} else if (errno == EXDEV) {
++		if ((ifp = open(tmp_file_path, O_RDONLY)) == -1)
++			goto error;
++
++		if (fstat(ifp, &st) == -1)
++			goto error;
++
++		if ((ofp = open(file_path, O_WRONLY | O_CREAT)) == -1)
++			goto error;
++
++		if (sendfile(ofp, ifp, &offset, st.st_size) == -1)
++ 			goto error;
++
++		goto end;
++	} else {
++		goto error;
++	}
++
++
++error:
++	BarUiMsg(settings, MSG_ERR, "Error moving the audio file (%d:%s).\n",
++			errno, strerror(errno));
++
++	exit_status = -1;
++
++end:
++	close(ifp);
++	close(ofp);
++
++	return exit_status;
++}
++
+ // vim: set noexpandtab:
+ 
+diff --git a/src/fly.h b/src/fly.h
+index 7186790..1f40407 100644
+--- a/src/fly.h
++++ b/src/fly.h
+@@ -211,4 +211,18 @@ int BarFlyTag(BarFly_t* fly, BarSettings_t const* settings);
+  */
+ int BarFlyWrite(BarFly_t* fly, void const* data, size_t data_size);
+ 
++/**
++ * Moves the temporary file to the desired file location.  Fix for rename()
++ * when /tmp is on a separate filesystem than the desired file location
++ * (e.g. /tmp is on tmpfs)
++ *
++ * @param tmp_file_path File object for temporary file
++ * @param file_path File Object for saved file
++ * @param settings A pointer to the application's settings structure.
++ * @return If renaming/moving the file is successful 0 will be returned,
++ * otherwise -1 is returned.
++ */
++int BarFlyMove(const char* tmp_file_path, const char* file_path,
++        BarSettings_t const* settings);
++
+ #endif /* _FLY_H */
+diff --git a/src/fly_id3.c b/src/fly_id3.c
+index 322d597..edbb870 100644
+--- a/src/fly_id3.c
++++ b/src/fly_id3.c
+@@ -344,10 +344,8 @@ int BarFlyID3WriteFile(char const* file_path, struct id3_tag const* tag,
+ 	/*
+ 	 * Overwrite the audio file with the tmp file.
+ 	 */
+-	status_int = rename(tmp_file_path, file_path);
++	status_int = BarFlyMove(tmp_file_path, file_path, settings);
+ 	if (status_int != 0) {
+-		BarUiMsg(settings, MSG_ERR, "Could not overwrite the audio file "
+-				"(%d:%s).\n", errno, strerror(errno));
+ 		goto error;
+ 	}
+ 
+diff --git a/src/fly_mp4.c b/src/fly_mp4.c
+index ce99d38..922fe6c 100644
+--- a/src/fly_mp4.c
++++ b/src/fly_mp4.c
+@@ -2025,10 +2025,8 @@ int BarFlyMp4TagWrite(BarFlyMp4Tag_t* tag, BarSettings_t const* settings)
+ 	fclose(tag->mp4_file);
+ 	tag->mp4_file = NULL;
+ 
+-	status = rename(tmp_file_path, tag->file_path);
++	status = BarFlyMove(tmp_file_path, tag->file_path, settings);
+ 	if (status != 0) {
+-		BarUiMsg(settings, MSG_ERR, "Error overwriting the MP4 file (%d:%s).\n",
+-				errno, strerror(errno));
+ 		goto error;
+ 	}
+ 
